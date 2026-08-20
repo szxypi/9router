@@ -31,10 +31,9 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
 import { FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import {
-  QODER_CHAT_URL_ENCODED,
-  QODER_CHAT_BASE_ALT,
-  QODER_CHAT_SIG_PATH,
   QODER_MODEL_MAP,
+  getQoderEndpoints,
+  resolveQoderRegion,
 } from "../shared/qoder/constants.js";
 import { getQoderModelConfig, resolveQoderModels, isQoderPat, resolveQoderCredentials } from "../services/qoderModels.js";
 
@@ -127,16 +126,16 @@ function truncate(s, n) {
 /**
  * Map the OpenAI-style request body into the exact shape Qoder expects.
  */
-async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal }) {
-  const qoderKey = String(model || "").replace(/^qoder\//, "");
-  
+async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, region }) {
+  const qoderKey = String(model || "").replace(/^qoder(-cn)?\//, "");
+
   // Fetch model config from dynamic API instead of relying on static QODER_MODEL_MAP.
   // This allows support for new Qoder models (e.g., qmodel_latest) without code changes.
-  let modelConfig = await getQoderModelConfig(credentials, qoderKey, { log, proxyOptions, signal });
+  let modelConfig = await getQoderModelConfig(credentials, qoderKey, { log, proxyOptions, signal, region });
   if (!modelConfig) {
     // Try a forced refresh once before giving up — the cache may simply
     // not be populated yet on first ever call for this credential.
-    const refreshed = await resolveQoderModels(credentials, { forceRefresh: true, log, proxyOptions, signal });
+    const refreshed = await resolveQoderModels(credentials, { forceRefresh: true, log, proxyOptions, signal, region });
     const retried = refreshed?.rawConfigs.get(qoderKey);
     if (!retried) {
       throw new Error(
@@ -426,18 +425,22 @@ async function wrapQoderSSE(response, model) {
 }
 
 export class QoderExecutor extends BaseExecutor {
-  constructor() {
-    super("qoder", PROVIDERS.qoder);
+  constructor(providerId = "qoder") {
+    super(providerId, PROVIDERS[providerId]);
+    // "qoder" → intl (*.qoder.sh), "qoder-cn" → cn (*.qoder.com.cn)
+    this.region = resolveQoderRegion(providerId);
+    this.endpoints = getQoderEndpoints(this.region);
   }
 
   buildUrl(credentials) {
-    // Job-token (jt-...) traffic must hit api2.qoder.sh — api3 rejects jt-
-    // with "Login expired" (403). Device tokens (dt-...) stay on api3.
+    // Job-token (jt-...) traffic must hit the alt host — api3 rejects jt-
+    // with "Login expired" (403). Device tokens (dt-...) stay on the primary.
+    // (CN's alt host is the gateway itself; see shared/qoder/constants.js.)
     const raw = credentials?.apiKey || credentials?.accessToken;
     if (typeof raw === "string" && !raw.startsWith("pt-") && (raw.startsWith("jt-") || (credentials?.accessToken || "").startsWith("jt-"))) {
-      return `${QODER_CHAT_BASE_ALT}/algo${QODER_CHAT_SIG_PATH}?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`;
+      return this.endpoints.chatUrlEncodedAlt;
     }
-    return QODER_CHAT_URL_ENCODED;
+    return this.endpoints.chatUrlEncoded;
   }
 
   // Override execute entirely — Qoder needs:
@@ -452,7 +455,7 @@ export class QoderExecutor extends BaseExecutor {
     const rawToken = credentials?.apiKey || credentials?.accessToken;
     if (isQoderPat(rawToken)) {
       try {
-        credentials = await resolveQoderCredentials(credentials, proxyOptions, signal);
+        credentials = await resolveQoderCredentials(credentials, proxyOptions, signal, this.region);
       } catch (err) {
         log?.error?.("QODER", `PAT exchange failed: ${err.message}`);
         const fakeResp = new Response(
@@ -487,7 +490,7 @@ export class QoderExecutor extends BaseExecutor {
     let qoderKey;
     let payload;
     try {
-      ({ qoderKey, payload } = await buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal }));
+      ({ qoderKey, payload } = await buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, region: this.region }));
     } catch (err) {
       const fakeResp = new Response(
         JSON.stringify({ error: { message: err.message } }),

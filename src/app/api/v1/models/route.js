@@ -37,6 +37,21 @@ const LIVE_MODEL_RESOLVERS = {
       refreshToken: conn.refreshToken,
       email: conn.email,
       displayName: conn.displayName,
+      provider: "qoder",
+      providerSpecificData: conn.providerSpecificData || {}
+    });
+    if (!result?.models?.length) return null;
+    return {
+      models: result.models.map((m) => ({ id: m.id, name: m.name })),
+    };
+  },
+  "qoder-cn": async (conn) => {
+    const result = await resolveQoderModels({
+      accessToken: conn.accessToken,
+      refreshToken: conn.refreshToken,
+      email: conn.email,
+      displayName: conn.displayName,
+      provider: "qoder-cn",
       providerSpecificData: conn.providerSpecificData || {}
     });
     if (!result?.models?.length) return null;
