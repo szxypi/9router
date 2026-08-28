@@ -123,6 +123,41 @@ function truncate(s, n) {
 }
 
 /**
+ * Pick the largest context tier a model publishes.
+ *
+ * Qoder models carry `context_config` (e.g. {"200K":{token_count,is_default},
+ * "400K":{...},"1M":{...}}) and upstream defaults to the entry flagged
+ * is_default — 200K on every CN model that offers more. The model_config block
+ * is echoed back to the gateway verbatim, so promoting the default here is what
+ * actually unlocks the larger window; without it a 1M-capable model silently
+ * serves 200K. Returns a shallow-cloned config, or the original when there is
+ * nothing to promote (auto/kmodel/mmodel publish a single tier).
+ */
+function withLargestContextTier(modelConfig) {
+  const tiers = modelConfig?.context_config;
+  if (!tiers || typeof tiers !== "object") return modelConfig;
+
+  let bestName = null;
+  let bestTokens = -1;
+  let currentDefault = -1;
+  for (const [name, tier] of Object.entries(tiers)) {
+    const tokens = Number(tier?.token_count) || 0;
+    if (tier?.is_default) currentDefault = tokens;
+    if (tokens > bestTokens) {
+      bestTokens = tokens;
+      bestName = name;
+    }
+  }
+  if (!bestName || bestTokens <= currentDefault) return modelConfig;
+
+  const promoted = {};
+  for (const [name, tier] of Object.entries(tiers)) {
+    promoted[name] = { ...tier, is_default: name === bestName };
+  }
+  return { ...modelConfig, context_config: promoted, max_input_tokens: bestTokens };
+}
+
+/**
  * Map the OpenAI-style request body into the exact shape Qoder expects.
  */
 async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, region }) {
@@ -143,6 +178,7 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
     }
     modelConfig = { ...retried, key: qoderKey };
   }
+  modelConfig = withLargestContextTier(modelConfig);
 
   const { messages, systemText } = normalizeMessages(body.messages || []);
   const tools = body.tools;

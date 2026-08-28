@@ -121,6 +121,31 @@ const CODEX_GPT_56_DEFAULT_CAPS = { vision: true, reasoning: true, search: true,
  * Provider-specific capability overrides. Keyed by provider alias/id.
  */
 export const PROVIDER_CAPABILITIES = {
+  // Qoder CN (qoder.com.cn). Limits mirror the live catalog served by
+  // gateway.qoder.com.cn/algo/api/v2/model/list (verified 2026-08-28).
+  // Without these the whole edition falls through to DEFAULT_CAPABILITIES and
+  // every model is reported as a 200k window; clients size their compaction
+  // threshold off context_length, so that floor silently caps usable context.
+  //
+  // contextWindow is the model's TOP tier, not its default: every model below
+  // except auto/kmodel/mmodel publishes context_config {200K*, 400K, 1M} with
+  // 200K as the upstream default. buildQoderRequestBody promotes the request
+  // to the largest tier, so the ceiling advertised here is the one clients get.
+  "qoder-cn": {
+    "auto":          { vision: true, reasoning: true,  contextWindow: 180000 },
+    "qmodel_38max":  { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "qfmodel":       { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "qmodel_latest": { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "qmodel":        { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "q37fmodel":     { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "dmodel":        { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "dfmodel":       { vision: true, reasoning: false, contextWindow: 1000000 },
+    "gmodel":        { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "gfmodel":       { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "gm51model":     { vision: true, reasoning: true,  contextWindow: 1000000 },
+    "kmodel":        { vision: true, reasoning: true,  contextWindow: 256000 },
+    "mmodel":        { vision: false, reasoning: false, contextWindow: 200000 },
+  },
   // NVIDIA NIM is OpenAI-compatible → rejects MiniMax/GLM native `thinking` field.
   // Force openai reasoning_effort format for its reasoning models. #issue
   "nvidia": {
