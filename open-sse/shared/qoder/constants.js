@@ -112,19 +112,27 @@ export const QODER_MACHINE_TYPE = "5";
 // Canonical model identifiers. Identity map — keep as a map so callers can
 // cheaply test "is this a known qoder model?" before sending the request.
 export const QODER_MODEL_MAP = {
-  // Tier models
+  // Tier models (intl only — the CN edition does not publish these)
   auto: "auto",
   ultimate: "ultimate",
   performance: "performance",
   efficient: "efficient",
   lite: "lite",
-  // Frontier models
+  // Frontier models (union of both editions; verified against the live
+  // model/list of each on 2026-08-28)
   qmodel: "qmodel",
   qmodel_latest: "qmodel_latest",
+  qmodel_preview: "qmodel_preview", // intl only
+  qmodel_38max: "qmodel_38max", // cn only
+  qfmodel: "qfmodel", // cn only
+  q37fmodel: "q37fmodel", // cn only
   dmodel: "dmodel",
   dfmodel: "dfmodel",
+  gmodel: "gmodel", // cn only (GLM-5.3)
+  gfmodel: "gfmodel", // cn only (GLM-5.3-Flash)
   gm51model: "gm51model",
   kmodel: "kmodel",
+  kmodel_latest: "kmodel_latest", // intl only
   mmodel: "mmodel",
 };
 

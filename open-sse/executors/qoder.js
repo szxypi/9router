@@ -31,7 +31,6 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
 import { FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import {
-  QODER_MODEL_MAP,
   getQoderEndpoints,
   resolveQoderRegion,
 } from "../shared/qoder/constants.js";
