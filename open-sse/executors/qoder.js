@@ -252,12 +252,22 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
 /**
  * Check if a qoder error message indicates a billing/quota block.
  * Signatures: code 112 (quota exhausted), code 10605 (queue throttle), pricingUrl field.
+ *
+ * Qoder nests its error payload as JSON-inside-JSON, and the depth varies per
+ * edition. Quota blocks arrive flat:
+ *   {"code":"112","message":"{\"pricingUrl\":\"...\"}"}
+ * while the CN edition wraps queue throttles one level deeper:
+ *   {"code":"403","message":"{\"code\":\"10605\",\"message\":\"{...}\"}"}
+ * so the marker only ever appears escaped there. Strip escape backslashes
+ * before matching so every nesting depth reads the same — otherwise the
+ * throttle frame slips past detection and its raw text is delivered to the
+ * client as if it were the model's answer.
  */
 function isBillingBlock(inner) {
   if (!inner || typeof inner !== "string") return false;
-  const lowerMsg = inner.toLowerCase();
+  const flat = inner.replace(/\\+/g, "");
   // Match: {"code":"112",...}, {"code":"10605",...}, or pricingUrl field
-  return /\"code\"\s*:\s*\"(112|10605)\"/.test(inner) || lowerMsg.includes("pricingurl");
+  return /"code"\s*:\s*"(112|10605)"/.test(flat) || flat.toLowerCase().includes("pricingurl");
 }
 
 /**
@@ -268,30 +278,36 @@ function isBillingBlock(inner) {
  */
 async function peekFirstQoderFrame(reader, decoder) {
   let consumed = "";
+  // Offset of the first byte not yet scanned. Blank lines, `event:` frames and
+  // SSE comments must be skipped *and* advanced past — re-scanning from 0 would
+  // keep re-reading the same leading line while draining the whole socket, so
+  // a billing frame sitting behind a keepalive would never be seen.
+  let scanFrom = 0;
   while (true) {
+    let nl;
+    while ((nl = consumed.indexOf("\n", scanFrom)) !== -1) {
+      const line = consumed.slice(scanFrom, nl).replace(/\r$/, "").trim();
+      scanFrom = nl + 1;
+      if (!line.startsWith("data:")) continue;
+
+      const data = line.slice(5).trimStart();
+      if (data === "[DONE]") return { isBilling: false, consumed };
+
+      let envelope;
+      try { envelope = JSON.parse(data); } catch { return { isBilling: false, consumed }; }
+
+      const statusVal = typeof envelope.statusCodeValue === "number" ? envelope.statusCodeValue : 200;
+      const inner = typeof envelope.body === "string" ? envelope.body : "";
+
+      if (statusVal !== 200 && isBillingBlock(inner)) {
+        return { isBilling: true, statusVal, message: inner || `qoder billing block (${statusVal})` };
+      }
+      return { isBilling: false, consumed };
+    }
+
     const { done, value } = await reader.read();
     if (done) return { isBilling: false, consumed, upstreamDone: true };
-
     consumed += decoder.decode(value, { stream: true });
-    const nl = consumed.indexOf("\n");
-    if (nl === -1) continue; // need a full line first
-
-    const line = consumed.slice(0, nl).replace(/\r$/, "").trim();
-    if (!line.startsWith("data:")) continue;
-
-    const data = line.slice(5).trimStart();
-    if (data === "[DONE]") return { isBilling: false, consumed };
-
-    let envelope;
-    try { envelope = JSON.parse(data); } catch { return { isBilling: false, consumed }; }
-
-    const statusVal = typeof envelope.statusCodeValue === "number" ? envelope.statusCodeValue : 200;
-    const inner = typeof envelope.body === "string" ? envelope.body : "";
-
-    if (statusVal !== 200 && isBillingBlock(inner)) {
-      return { isBilling: true, statusVal, message: inner || `qoder billing block (${statusVal})` };
-    }
-    return { isBilling: false, consumed };
   }
 }
 

@@ -27,6 +27,35 @@ describe("isBillingBlock", () => {
     expect(isBillingBlock(msg)).toBe(true);
   });
 
+  // Observed live on qoder-cn (2026-08-31): the CN edition wraps queue
+  // throttles one level deeper than quota blocks, so the "10605" marker only
+  // shows up escaped. Matching the raw string missed it and the throttle text
+  // was handed to the client as the assistant's answer.
+  it("detects code 10605 nested inside an escaped message payload (qoder-cn)", () => {
+    const msg = JSON.stringify({
+      code: "403",
+      message: JSON.stringify({
+        code: "10605",
+        message: JSON.stringify({
+          isQueued: true,
+          modelKey: "qfmodel",
+          queueCount: 894,
+          queueType: "slow",
+          retryAfterSeconds: 30,
+        }),
+      }),
+    });
+    expect(isBillingBlock(msg)).toBe(true);
+  });
+
+  it("detects code 112 nested inside an escaped message payload", () => {
+    const msg = JSON.stringify({
+      code: "403",
+      message: JSON.stringify({ code: "112", message: "Quota exhausted" }),
+    });
+    expect(isBillingBlock(msg)).toBe(true);
+  });
+
   it("returns false for normal errors without billing markers", () => {
     const msg = '{"code":"500","message":"Internal error"}';
     expect(isBillingBlock(msg)).toBe(false);
@@ -90,6 +119,38 @@ describe("wrapQoderSSE billing detection", () => {
     const upstream = `data: ${billingEnv}\n\n`;
 
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/ultimate");
+
+    expect(wrapped.status).toBe(403);
+  });
+
+  it("returns 403 when the nested qoder-cn throttle frame is first", async () => {
+    const inner = JSON.stringify({
+      code: "403",
+      message: JSON.stringify({
+        code: "10605",
+        message: JSON.stringify({ isQueued: true, modelKey: "qfmodel", retryAfterSeconds: 30 }),
+      }),
+    });
+    const throttleEnv = JSON.stringify({ statusCodeValue: 403, body: inner });
+    const upstream = `data: ${throttleEnv}\n\n`;
+
+    const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder-cn/qfmodel");
+
+    expect(wrapped.status).toBe(403);
+    const json = await wrapped.json();
+    expect(json.error.message).toContain("10605");
+  });
+
+  // A keepalive/comment line ahead of the billing frame used to pin the scan
+  // on the first line forever, draining the socket without ever inspecting it.
+  it("still detects a billing frame that follows a non-data line", async () => {
+    const billingEnv = JSON.stringify({
+      statusCodeValue: 403,
+      body: '{"code":"112","message":"Quota exhausted"}',
+    });
+    const upstream = `: keepalive\n\ndata: ${billingEnv}\n\n`;
+
+    const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder-cn/gfmodel");
 
     expect(wrapped.status).toBe(403);
   });
